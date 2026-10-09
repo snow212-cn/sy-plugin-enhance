@@ -1,29 +1,19 @@
-# Automated free-edition releases
+# Automated release workflow
 
-This fork does not contain the full upstream source tree. Its release workflow therefore patches the upstream prebuilt `package.zip` instead of compiling the plugin.
+This fork does not contain the full upstream source tree. Releases are produced by applying a narrow patch to the upstream prebuilt `package.zip`.
 
-## What the workflow does
+## Automation
 
-- Checks the latest stable release of `Wetoria/sy-plugin-enhance` every six hours. It can also be started manually from the Actions tab.
-- Checks whether the exact upstream tag already has a Release in this fork. If yes, it exits without publishing a duplicate.
-- Downloads the upstream `package.zip`, verifies its ZIP structure and checks that `plugin.json` has the same version as the upstream tag.
-- Rewrites one shared authorization context in `index.js`: `isFree=false`, `isNotFree=true`, `isPro/isVip/isPermanent=true`, and `computedLevel(...)=true` (provided as computed refs).
-- Runs JavaScript syntax and ZIP integrity checks, then publishes `package.zip` as a GitHub Release with the exact same tag/version as upstream.
+- Checks the latest stable release of `Wetoria/sy-plugin-enhance` every six hours.
+- Downloads and verifies `package.zip`; the manifest version must match the upstream tag.
+- Applies a narrowly matched patch. It changes only the shared free/paid gate state and the result of the level comparison inside the existing `computedLevel` closure.
+- Preserves the original `isPro`, `isVip`, and `isPermanent` state, plus the original `computedLevel` function and its side effects.
+- Checks JavaScript syntax and ZIP integrity before publishing.
+- Uses the upstream tag verbatim. Release titles use the format `叶归 v1.12.6（免费版）`.
+- Existing releases are skipped when their notes contain the current patch marker. If a release lacks that marker, its asset and title are repaired in place.
 
-Example: upstream `v1.12.6` results in a fork Release tagged `v1.12.6`, and the attached plugin manifest remains version `1.12.6`.
+## Runtime caution
 
-## What this changes
+A syntax check does not prove that the plugin behaves correctly in SiYuan. CPU usage and feature behavior must be tested after installation. The earlier broad patch that forced all Pro/VIP/Permanent flags to true was withdrawn because it altered more runtime state than necessary.
 
-The patch grants access through feature checks that consume this shared authorization context. It does not change the underlying feature implementations or require users to buy/import a license to pass those checks.
-
-## Known limits and safe failure
-
-This is a package-level patch, not a source rebuild. Old purchase/license screens, wording, tier labels, or code paths that bypass the shared authorization context may still exist. This setup should be treated as access-unlock automation, not proof that every UI trace of the paid model has been removed.
-
-The patcher expects a known minified authorization initializer and the computed-ref helper `ux`. If upstream changes the bundle layout, helper name, initializer shape, or version metadata, the workflow fails before creating a release. It deliberately does not publish an unpatched artifact. The patch point must then be reviewed and updated for that upstream version.
-
-## Workflow location
-
-`.github/workflows/sync-free-release.yml`
-
-To start an initial release immediately, open **Actions -> Sync upstream free release -> Run workflow**. A successful first run should publish the current latest upstream version. Subsequent runs skip versions that already have a release in this fork.
+The patcher deliberately fails when the expected minified expressions do not match exactly once. If the upstream bundle changes, review the new package and update the patch logic rather than publishing an unverified build.
