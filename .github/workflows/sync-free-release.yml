@@ -118,4 +118,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "叶归 $UPSTREAM_TAG - 免费版" \
             --notes-file "$RUNNER_TEMP/release-notes.md"
-          echo "Published `$UPSTREAM_TAG` with the patched `package.zip`." >> "$GITHUB_STEP_SUMMARY"
+          echo "Published $UPSTREAM_TAG with the patched package.zip." >> "$GITHUB_STEP_SUMMARY"
