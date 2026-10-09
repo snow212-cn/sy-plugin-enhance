@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: sync-upstream-release-\${{ github.repository }}
+  group: sync-upstream-release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
       - name: Inspect upstream release
         id: check
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -36,7 +36,7 @@ jobs:
             -o "$RUNNER_TEMP/upstream.json"
           TAG="$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' "$RUNNER_TEMP/upstream.json")"
           if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            VERSION="\${BASH_REMATCH[1]}"
+            VERSION="${BASH_REMATCH[1]}"
           else
             echo "::error::Unsupported tag: $TAG"; exit 1
           fi
@@ -66,7 +66,7 @@ jobs:
       - name: Download source package
         if: steps.check.outputs.run_patch == 'true'
         env:
-          ASSET_URL: \${{ steps.check.outputs.asset_url }}
+          ASSET_URL: ${{ steps.check.outputs.asset_url }}
         run: |
           set -euo pipefail
           curl -fL --retry 3 "$ASSET_URL" -o "$RUNNER_TEMP/source.zip"
@@ -77,7 +77,7 @@ jobs:
       - name: Modify and check package
         if: steps.check.outputs.run_patch == 'true'
         env:
-          TAG: \${{ steps.check.outputs.tag }}
+          TAG: ${{ steps.check.outputs.tag }}
         run: |
           set -euo pipefail
           node scripts/patch-release.mjs "$RUNNER_TEMP/package" "$TAG"
@@ -88,7 +88,7 @@ jobs:
       - name: Prepare notes
         if: steps.check.outputs.run_patch == 'true'
         env:
-          TAG: \${{ steps.check.outputs.tag }}
+          TAG: ${{ steps.check.outputs.tag }}
         run: |
           set -euo pipefail
           jq -r --arg tag "$TAG" '
@@ -102,8 +102,8 @@ jobs:
       - name: Replace current release package
         if: steps.check.outputs.run_patch == 'true' && steps.check.outputs.repair == 'true'
         env:
-          GH_TOKEN: \${{ github.token }}
-          TAG: \${{ steps.check.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.check.outputs.tag }}
         run: |
           set -euo pipefail
           gh release upload "$TAG" "$GITHUB_WORKSPACE/dist/package.zip" --repo "$GITHUB_REPOSITORY" --clobber
@@ -113,8 +113,8 @@ jobs:
       - name: Publish release
         if: steps.check.outputs.run_patch == 'true' && steps.check.outputs.repair != 'true'
         env:
-          GH_TOKEN: \${{ github.token }}
-          TAG: \${{ steps.check.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.check.outputs.tag }}
         run: |
           set -euo pipefail
           gh release create "$TAG" "$GITHUB_WORKSPACE/dist/package.zip" \
