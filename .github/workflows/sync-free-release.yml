@@ -1,0 +1,120 @@
+name: Sync upstream free release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sync-free-release.yml"
+      - "scripts/patch-release.mjs"
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-free-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+
+      - name: Check upstream version
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Wetoria/sy-plugin-enhance/releases/latest \
+            -o "$RUNNER_TEMP/upstream-release.json"
+
+          TAG="$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' "$RUNNER_TEMP/upstream-release.json")"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Unexpected upstream stable release tag: $TAG"
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}"
+          ASSET_URL="$(jq -er '.assets[] | select(.name == "package.zip") | .browser_download_url' "$RUNNER_TEMP/upstream-release.json")"
+
+          STATUS="$(curl -sS -o "$RUNNER_TEMP/existing-release.json" -w '%{http_code}' \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+
+          if [[ "$STATUS" == "200" ]]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Upstream $TAG already has a release in this fork; nothing to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif [[ "$STATUS" != "404" ]]; then
+            echo "::error::Could not check fork release state (HTTP $STATUS)."
+            cat "$RUNNER_TEMP/existing-release.json"
+            exit 1
+          fi
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset_url=$ASSET_URL" >> "$GITHUB_OUTPUT"
+          echo "Detected new upstream stable release: $TAG." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download and verify upstream package
+        if: steps.check.outputs.should_release == 'true'
+        env:
+          ASSET_URL: ${{ steps.check.outputs.asset_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 "$ASSET_URL" -o "$RUNNER_TEMP/upstream-package.zip"
+          unzip -tq "$RUNNER_TEMP/upstream-package.zip"
+          mkdir -p "$RUNNER_TEMP/package" "$GITHUB_WORKSPACE/dist"
+          unzip -q "$RUNNER_TEMP/upstream-package.zip" -d "$RUNNER_TEMP/package"
+
+      - name: Apply free-access patch and validate
+        if: steps.check.outputs.should_release == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/patch-release.mjs "$RUNNER_TEMP/package" "$UPSTREAM_TAG"
+          node --check "$RUNNER_TEMP/package/index.js"
+          (cd "$RUNNER_TEMP/package" && zip -X -q -r "$GITHUB_WORKSPACE/dist/package.zip" .)
+          unzip -tq "$GITHUB_WORKSPACE/dist/package.zip"
+          echo "Patched package passed ZIP integrity and JavaScript syntax checks." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare release notes
+        if: steps.check.outputs.should_release == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r --arg tag "$UPSTREAM_TAG" '
+            "## Free fork build\n\n" +
+            "Automatically derived from the upstream release `Wetoria/sy-plugin-enhance` / ($tag).\n\n" +
+            "The shared authorization context in the bundled `index.js` is overridden so feature gates that use its authorization flags and `computedLevel` are granted. This is a package-level patch, not a rebuild from source.\n\n" +
+            "The workflow stops without publishing if the upstream bundle no longer matches the expected patch point.\n\n" +
+            "## Upstream release notes\n\n" + (.body // "_No upstream release notes were provided._")
+          ' "$RUNNER_TEMP/upstream-release.json" > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Publish same-version release
+        if: steps.check.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$UPSTREAM_TAG" "$GITHUB_WORKSPACE/dist/package.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "叶归 $UPSTREAM_TAG - 免费版" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          echo "Published `$UPSTREAM_TAG` with the patched `package.zip`." >> "$GITHUB_STEP_SUMMARY"
