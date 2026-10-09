@@ -48,7 +48,7 @@ jobs:
           REPAIR=false
           if [[ "$STATUS" == "200" ]]; then
             BODY="$(jq -r '.body // ""' "$RUNNER_TEMP/fork-release.json")"
-            if grep -Fq '<!-- free-patch-schema: 2 -->' <<< "$BODY"; then
+            if grep -Fq '<!-- free-patch-schema: 3 -->' <<< "$BODY"; then
               echo "run_patch=false" >> "$GITHUB_OUTPUT"
               echo "Already current: $TAG" >> "$GITHUB_STEP_SUMMARY"
               exit 0
@@ -92,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           jq -r --arg tag "$TAG" '
-            "<!-- free-patch-schema: 2 -->\n\n" +
+            "<!-- free-patch-schema: 3 -->\n\n" +
             "## 叶归免费版\n\n" +
             "基于上游正式版本 \($tag) 自动生成。对预构建产物做有限修改；未从源码重新构建。\n\n" +
             "若上游产物结构变化，自动流程将停止，不会发布未确认的包。\n\n" +
@@ -108,7 +108,7 @@ jobs:
           set -euo pipefail
           gh release upload "$TAG" "$GITHUB_WORKSPACE/dist/package.zip" --repo "$GITHUB_REPOSITORY" --clobber
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "叶归 $TAG（免费版）" --notes-file "$RUNNER_TEMP/notes.md"
+            --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
 
       - name: Publish release
         if: steps.check.outputs.run_patch == 'true' && steps.check.outputs.repair != 'true'
@@ -119,5 +119,5 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" "$GITHUB_WORKSPACE/dist/package.zip" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "叶归 $TAG（免费版）" \
+            --title "$TAG" \
             --notes-file "$RUNNER_TEMP/notes.md"
