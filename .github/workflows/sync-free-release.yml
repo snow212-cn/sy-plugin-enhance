@@ -37,11 +37,12 @@ jobs:
             -o "$RUNNER_TEMP/upstream-release.json"
 
           TAG="$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' "$RUNNER_TEMP/upstream-release.json")"
-          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
             echo "::error::Unexpected upstream stable release tag: $TAG"
             exit 1
           fi
-          VERSION="${BASH_REMATCH[1]}"
           ASSET_URL="$(jq -er '.assets[] | select(.name == "package.zip") | .browser_download_url' "$RUNNER_TEMP/upstream-release.json")"
 
           STATUS="$(curl -sS -o "$RUNNER_TEMP/existing-release.json" -w '%{http_code}' \
@@ -99,7 +100,7 @@ jobs:
           set -euo pipefail
           jq -r --arg tag "$UPSTREAM_TAG" '
             "## Free fork build\n\n" +
-            "Automatically derived from the upstream release `Wetoria/sy-plugin-enhance` / ($tag).\n\n" +
+            "Automatically derived from the upstream release `Wetoria/sy-plugin-enhance` / \($tag).\n\n" +
             "The shared authorization context in the bundled `index.js` is overridden so feature gates that use its authorization flags and `computedLevel` are granted. This is a package-level patch, not a rebuild from source.\n\n" +
             "The workflow stops without publishing if the upstream bundle no longer matches the expected patch point.\n\n" +
             "## Upstream release notes\n\n" + (.body // "_No upstream release notes were provided._")
