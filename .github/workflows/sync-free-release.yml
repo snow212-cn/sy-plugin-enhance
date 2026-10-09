@@ -1,4 +1,4 @@
-name: Sync upstream release
+name: Sync upstream free release
 
 on:
   push:
@@ -14,110 +14,136 @@ permissions:
   contents: write
 
 concurrency:
-  group: sync-upstream-release-${{ github.repository }}
+  group: sync-free-release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout fork
         uses: actions/checkout@v4
 
-      - name: Inspect upstream release
+      - name: Check upstream version
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
+          curl -fsSL --retry 3 \
+            -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/Wetoria/sy-plugin-enhance/releases/latest \
-            -o "$RUNNER_TEMP/upstream.json"
-          TAG="$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' "$RUNNER_TEMP/upstream.json")"
+            -o "$RUNNER_TEMP/upstream-release.json"
+
+          TAG="$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' "$RUNNER_TEMP/upstream-release.json")"
           if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             VERSION="${BASH_REMATCH[1]}"
           else
-            echo "::error::Unsupported tag: $TAG"; exit 1
+            echo "::error::Unexpected upstream stable release tag: $TAG"
+            exit 1
           fi
-          ASSET_URL="$(jq -er '.assets[] | select(.name == "package.zip") | .browser_download_url' "$RUNNER_TEMP/upstream.json")"
-          STATUS="$(curl -sS -o "$RUNNER_TEMP/fork-release.json" -w '%{http_code}' \
+          ASSET_URL="$(jq -er '.assets[] | select(.name == "package.zip") | .browser_download_url' "$RUNNER_TEMP/upstream-release.json")"
+
+          STATUS="$(curl -sS -o "$RUNNER_TEMP/existing-release.json" -w '%{http_code}' \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
-          REPAIR=false
+
+          RELEASE_EXISTS=false
           if [[ "$STATUS" == "200" ]]; then
-            BODY="$(jq -r '.body // ""' "$RUNNER_TEMP/fork-release.json")"
-            if grep -Fq '<!-- free-patch-schema: 3 -->' <<< "$BODY"; then
-              echo "run_patch=false" >> "$GITHUB_OUTPUT"
-              echo "Already current: $TAG" >> "$GITHUB_STEP_SUMMARY"
+            TITLE="$(jq -r '.name // ""' "$RUNNER_TEMP/existing-release.json")"
+            if [[ "$TITLE" != "叶归 $TAG - 免费版" ]]; then
+              echo "::error::Tag $TAG already exists but does not belong to this free-edition workflow."
+              exit 1
+            fi
+            if jq -e '.body | contains("<!-- free-patch-revision: 2 -->")' "$RUNNER_TEMP/existing-release.json" >/dev/null; then
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              echo "Upstream $TAG already has free-patch revision 2; nothing to do." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            REPAIR=true
+            RELEASE_EXISTS=true
+            echo "Existing free-edition release $TAG uses an older patch; it will be corrected."
           elif [[ "$STATUS" != "404" ]]; then
-            echo "::error::Could not inspect existing release: HTTP $STATUS"; exit 1
+            echo "::error::Could not check fork release state (HTTP $STATUS)."
+            cat "$RUNNER_TEMP/existing-release.json"
+            exit 1
           fi
-          echo "run_patch=true" >> "$GITHUB_OUTPUT"
-          echo "repair=$REPAIR" >> "$GITHUB_OUTPUT"
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "release_exists=$RELEASE_EXISTS" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "asset_url=$ASSET_URL" >> "$GITHUB_OUTPUT"
+          echo "Detected upstream stable release: $TAG." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Download source package
-        if: steps.check.outputs.run_patch == 'true'
+      - name: Download and verify upstream package
+        if: steps.check.outputs.should_release == 'true'
         env:
           ASSET_URL: ${{ steps.check.outputs.asset_url }}
+        shell: bash
         run: |
           set -euo pipefail
-          curl -fL --retry 3 "$ASSET_URL" -o "$RUNNER_TEMP/source.zip"
-          unzip -tq "$RUNNER_TEMP/source.zip"
+          curl -fL --retry 3 --retry-delay 2 "$ASSET_URL" -o "$RUNNER_TEMP/upstream-package.zip"
+          unzip -tq "$RUNNER_TEMP/upstream-package.zip"
           mkdir -p "$RUNNER_TEMP/package" "$GITHUB_WORKSPACE/dist"
-          unzip -q "$RUNNER_TEMP/source.zip" -d "$RUNNER_TEMP/package"
+          unzip -q "$RUNNER_TEMP/upstream-package.zip" -d "$RUNNER_TEMP/package"
 
-      - name: Modify and check package
-        if: steps.check.outputs.run_patch == 'true'
+      - name: Apply free-access patch and validate
+        if: steps.check.outputs.should_release == 'true'
         env:
-          TAG: ${{ steps.check.outputs.tag }}
+          UPSTREAM_TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
-          node scripts/patch-release.mjs "$RUNNER_TEMP/package" "$TAG"
+          node scripts/patch-release.mjs "$RUNNER_TEMP/package" "$UPSTREAM_TAG"
           node --check "$RUNNER_TEMP/package/index.js"
           (cd "$RUNNER_TEMP/package" && zip -X -q -r "$GITHUB_WORKSPACE/dist/package.zip" .)
           unzip -tq "$GITHUB_WORKSPACE/dist/package.zip"
+          echo "Patched package passed ZIP integrity and JavaScript syntax checks." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Prepare notes
-        if: steps.check.outputs.run_patch == 'true'
+      - name: Prepare release notes
+        if: steps.check.outputs.should_release == 'true'
         env:
-          TAG: ${{ steps.check.outputs.tag }}
+          UPSTREAM_TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
-          jq -r --arg tag "$TAG" '
-            "<!-- free-patch-schema: 3 -->\n\n" +
-            "## 叶归免费版\n\n" +
-            "基于上游正式版本 \($tag) 自动生成。对预构建产物做有限修改；未从源码重新构建。\n\n" +
-            "若上游产物结构变化，自动流程将停止，不会发布未确认的包。\n\n" +
-            "## 上游说明\n\n" + (.body // "上游未提供发布说明。")
-          ' "$RUNNER_TEMP/upstream.json" > "$RUNNER_TEMP/notes.md"
+          jq -r --arg tag "$UPSTREAM_TAG" '
+            "<!-- free-patch-revision: 2 -->\n\n" +
+            "## Free fork build\n\n" +
+            "Automatically derived from the upstream release Wetoria/sy-plugin-enhance / \($tag).\n\n" +
+            "The patch leaves the original authorization-state registration intact, makes the free/non-free flags consistent, and allows the central numeric tier check. Pro/VIP/permanent tier flags are no longer all forced to true. This is a package-level patch, not a source rebuild.\n\n" +
+            "The workflow stops without publishing if the upstream bundle no longer matches the expected patch points.\n\n" +
+            "## Upstream release notes\n\n" + (.body // "_No upstream release notes were provided._")
+          ' "$RUNNER_TEMP/upstream-release.json" > "$RUNNER_TEMP/release-notes.md"
 
-      - name: Replace current release package
-        if: steps.check.outputs.run_patch == 'true' && steps.check.outputs.repair == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.check.outputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release upload "$TAG" "$GITHUB_WORKSPACE/dist/package.zip" --repo "$GITHUB_REPOSITORY" --clobber
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
-
-      - name: Publish release
-        if: steps.check.outputs.run_patch == 'true' && steps.check.outputs.repair != 'true'
+      - name: Update existing free-edition release
+        if: steps.check.outputs.should_release == 'true' && steps.check.outputs.release_exists == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.check.outputs.tag }}
+          UPSTREAM_TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
-          gh release create "$TAG" "$GITHUB_WORKSPACE/dist/package.zip" \
+          gh release upload "$UPSTREAM_TAG" "$GITHUB_WORKSPACE/dist/package.zip" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$UPSTREAM_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$TAG" \
-            --notes-file "$RUNNER_TEMP/notes.md"
+            --title "叶归 $UPSTREAM_TAG - 免费版" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          echo "Updated the existing $UPSTREAM_TAG release with patch revision 2." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish new same-version release
+        if: steps.check.outputs.should_release == 'true' && steps.check.outputs.release_exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$UPSTREAM_TAG" "$GITHUB_WORKSPACE/dist/package.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "叶归 $UPSTREAM_TAG - 免费版" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          echo "Published $UPSTREAM_TAG with the patched package.zip." >> "$GITHUB_STEP_SUMMARY"

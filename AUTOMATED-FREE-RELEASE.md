@@ -1,19 +1,30 @@
-# Automated release workflow
+# Automated free-edition releases
 
-This fork does not contain the full upstream source tree. Releases are produced by applying a narrow patch to the upstream prebuilt `package.zip`.
+This fork does not contain the full upstream source tree. It modifies the upstream prebuilt `package.zip` instead of compiling the plugin.
 
-## Automation
+## Workflow behavior
 
-- Checks the latest stable release of `Wetoria/sy-plugin-enhance` every six hours.
-- Downloads and verifies `package.zip`; the manifest version must match the upstream tag.
-- Applies a narrowly matched patch. It changes only the shared free/paid gate state and the result of the level comparison inside the existing `computedLevel` closure.
-- Preserves the original `isPro`, `isVip`, and `isPermanent` state, plus the original `computedLevel` function and its side effects.
-- Checks JavaScript syntax and ZIP integrity before publishing.
-- Uses the upstream tag verbatim. Release titles use the format `叶归 v1.12.6（免费版）`.
-- Existing releases are skipped when their notes contain the current patch marker. If a release lacks that marker, its asset and title are repaired in place.
+- Checks the latest stable release of `Wetoria/sy-plugin-enhance` every six hours, or manually from Actions.
+- Downloads the upstream `package.zip` only when a new version is found or an existing release needs a patch revision update.
+- Checks that `plugin.json` matches the upstream tag.
+- Applies a guarded bundle patch, then checks JavaScript syntax and ZIP integrity.
+- Creates a same-version release, or replaces the package asset if the current free release is an older patch revision.
 
-## Runtime caution
+## Free-access patch revision 2
 
-A syntax check does not prove that the plugin behaves correctly in SiYuan. CPU usage and feature behavior must be tested after installation. The earlier broad patch that forced all Pro/VIP/Permanent flags to true was withdrawn because it altered more runtime state than necessary.
+The first experimental patch forced `isPro`, `isVip`, and `isPermanent` all to true and replaced the whole `computedLevel` function. This was too aggressive and could activate tier-specific paths simultaneously.
 
-The patcher deliberately fails when the expected minified expressions do not match exactly once. If the upstream bundle changes, review the new package and update the patch logic rather than publishing an unverified build.
+Revision 2 instead:
+- keeps the existing computed-ref/provider registration and side effects;
+- sets only the `isFree` / `isNotFree` pair consistently to `false` / `true`;
+- changes the central numeric level predicate used by `computedLevel` to allow access;
+- leaves the original `isPro`, `isVip`, and `isPermanent` indicators intact.
+
+This is still a package-level patch, not a rebuild from source. It does not prove that every direct tier-specific check is removed; actual SiYuan runtime testing is required, especially for CPU usage and functionality.
+
+## Fail-safe checks
+
+The workflow refuses to publish if the tag format, ZIP layout, package version, shared authorization context, or numeric tier predicate differs from the expected structure. It intentionally stops rather than publishing a potentially unpatched artifact.
+
+Workflow: `.github/workflows/sync-free-release.yml`
+Patcher: `scripts/patch-release.mjs`
